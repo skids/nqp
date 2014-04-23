@@ -222,10 +222,13 @@ public class BootJavaInterop {
         //} catch (java.io.IOException e) {
         //    e.printStackTrace();
         //}
-        cc.constructed = (cc.target == null
-                ? new ByteClassLoader(bits)
-                : new ByteClassLoader(bits, cc.target.getClassLoader())
-            ).findClass(cc.className.replace('/','.'));
+        // XXX: The condition here can probably cut down a few more
+        // allocations if we check if the target's class loader isn't in the
+        // chain of loaders above gc.byteClassLoader.
+        ByteClassLoader loader = cc.target == null
+                ? gc.byteClassLoader
+                : new ByteClassLoader(cc.target.getClassLoader());
+        cc.constructed = loader.defineClass(cc.className.replace('/','.'), bits);
         try {
             cc.constructed.getField("constants").set(null, cc.constants.toArray(new Object[0]));
         } catch (ReflectiveOperationException roe) {
@@ -495,7 +498,6 @@ public class BootJavaInterop {
      * change this if you want to make char or boolean come in as objects.
      */
     protected int storageForType(Class<?> what) {
-        int ty;
         if (what == String.class || what == char.class)
             return StorageSpec.BP_STR;
         else if (what == float.class || what == double.class)
@@ -957,7 +959,6 @@ public class BootJavaInterop {
         cc.cv = cw;
 
         String superclass;
-        List<String> ifaces = new ArrayList< >();
         if (Modifier.isInterface(iface.getModifiers())) {
             cw.visit(Opcodes.V1_7, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, className, null,
                     "java/lang/Object", new String[] { Type.getInternalName(iface) });

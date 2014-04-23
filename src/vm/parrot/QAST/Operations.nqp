@@ -1086,6 +1086,48 @@ QAST::Operations.add_core_op('ctxcaller', -> $qastcomp, $op {
     $ops.result($reg);
     $ops
 });
+
+QAST::Operations.add_core_op('ctxouterskipthunks', -> $qastcomp, $op {
+    my $reg  := $*REGALLOC.fresh_p();
+    my $chk  := $*REGALLOC.fresh_p();
+    my $cuid := $*REGALLOC.fresh_s();
+    my $tmp  := $*REGALLOC.fresh_i();
+    my $ops  := PIRT::Ops.new();
+    my $lbl  := PIRT::Label.new(:name($qastcomp.unique('skip_thunks_')));
+    my $ctxpost := $qastcomp.coerce($qastcomp.as_post($op[0]), 'P');
+    $ops.push($ctxpost);
+    $ops.push_pirop('set', $reg, $ctxpost);
+    $ops.push($lbl);
+    $ops.push_pirop('getattribute', $reg, $reg, "'outer_ctx'");
+    $ops.push_pirop('getattribute', $chk, $reg, "'current_sub'");
+    $ops.push_pirop('callmethod', "'get_subid'", $chk, :result($cuid));
+    $ops.push_pirop('get_root_global', $chk, "['nqp']", "'thunk_blocks'");
+    $ops.push_pirop('exists', $tmp, $chk ~ '[' ~ $cuid ~ ']');
+    $ops.push_pirop('if', $tmp, $lbl);
+    $ops.result($reg);
+    $ops
+});
+QAST::Operations.add_core_op('ctxcallerskipthunks', -> $qastcomp, $op {
+    my $reg  := $*REGALLOC.fresh_p();
+    my $chk  := $*REGALLOC.fresh_p();
+    my $cuid := $*REGALLOC.fresh_s();
+    my $tmp  := $*REGALLOC.fresh_i();
+    my $ops  := PIRT::Ops.new();
+    my $lbl  := PIRT::Label.new(:name($qastcomp.unique('skip_thunks_')));
+    my $ctxpost := $qastcomp.coerce($qastcomp.as_post($op[0]), 'P');
+    $ops.push($ctxpost);
+    $ops.push_pirop('set', $reg, $ctxpost);
+    $ops.push($lbl);
+    $ops.push_pirop('getattribute', $reg, $reg, "'caller_ctx'");
+    $ops.push_pirop('getattribute', $chk, $reg, "'current_sub'");
+    $ops.push_pirop('callmethod', "'get_subid'", $chk, :result($cuid));
+    $ops.push_pirop('get_root_global', $chk, "['nqp']", "'thunk_blocks'");
+    $ops.push_pirop('exists', $tmp, $chk ~ '[' ~ $cuid ~ ']');
+    $ops.push_pirop('if', $tmp, $lbl);
+    $ops.result($reg);
+    $ops
+});
+
 QAST::Operations.add_core_op('ctxlexpad', -> $qastcomp, $op {
     my $reg := $*REGALLOC.fresh_p();
     my $ops := PIRT::Ops.new();
@@ -2302,7 +2344,6 @@ QAST::Operations.add_core_op('bindattr_i', :inlinable(1), -> $qastcomp, $op {
     }
 });
 QAST::Operations.add_core_pirop_mapping('bindattr_n', 'repr_bind_attr_num', '3PPsn', :inlinable(1));
-QAST::Operations.add_core_pirop_mapping('bindattr_s', 'repr_bind_attr_str', '3PPss', :inlinable(1));
 QAST::Operations.add_core_pirop_mapping('bindattr_s_nh', 'repr_bind_attr_str', '3PPss', :inlinable(1));
 QAST::Operations.add_core_pirop_mapping('bindattr_s_h', 'repr_bind_attr_str', '3PPsis', :inlinable(1));
 QAST::Operations.add_core_op('bindattr_s', :inlinable(1), -> $qastcomp, $op {

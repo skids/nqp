@@ -62,14 +62,27 @@ class HLL::Compiler does HLL::Backend::Default {
 
         my $target := nqp::lc(%adverbs<target>);
         my $save_ctx;
+        my $prompt := self.interactive_prompt // '> ';
+        my $code;
         while 1 {
             last if nqp::eoffh($stdin);
 
-            my $prompt := self.interactive_prompt // '> ';
-            my $code := nqp::readlineintfh($stdin, ~$prompt);
-            if nqp::isnull($code) || !nqp::defined($code) {
+            my $newcode := nqp::readlineintfh($stdin, ~$prompt);
+            if nqp::isnull($newcode) || !nqp::defined($newcode) {
                 nqp::print("\n");
                 last;
+            }
+            if $newcode {
+                $code := $code ~ $newcode;
+            }
+
+            if $newcode && nqp::substr($newcode, nqp::chars($newcode) - 1) eq "\\" {
+                # Need to get more code before we execute
+                $code := nqp::substr($code, 0, nqp::chars($code) - 1); # strip the \
+                if $code {
+                    $prompt := '* ';
+                }
+                next;
             }
 
             # Set the current position of stdout for autoprinting control
@@ -84,12 +97,16 @@ class HLL::Compiler does HLL::Backend::Default {
                     $output := self.eval($code, :outer_ctx($save_ctx), |%adverbs);
                     CATCH {
                         self.interactive_exception($!);
-                        next;
                     }
                 };
                 if nqp::defined($*MAIN_CTX) {
                     $save_ctx := $*MAIN_CTX;
                 }
+
+                $code := "";
+                $prompt := self.interactive_prompt // '> ';
+
+                next unless nqp::defined($output);
                 next if nqp::isnull($output);
 
                 if !$target {
@@ -369,6 +386,7 @@ class HLL::Compiler does HLL::Backend::Default {
                 }
                 next;
             }
+            nqp::printfh($stderr, nqp::sprintf("Stage %-11s: ", [$_])) if nqp::defined($stagestats);
             my $timestamp := nqp::time_n();
             if nqp::can(self, $_) {
                 $result := self."$_"($result, |%adverbs);
@@ -381,7 +399,7 @@ class HLL::Compiler does HLL::Backend::Default {
             }
             my $diff := nqp::time_n() - $timestamp;
             if nqp::defined($stagestats) {
-                nqp::printfh($stderr, nqp::sprintf("Stage %-11s: %7.3f", [$_, $diff]));
+                nqp::printfh($stderr, nqp::sprintf("%7.3f", [$diff]));
                 $!backend.force_gc() if nqp::bitand_i($stagestats, 0x4);
                 nqp::printfh($stderr, $!backend.vmstat())
                     if nqp::bitand_i($stagestats, 0x2);

@@ -443,19 +443,19 @@ sub savesite($il) {
 QAST::OperationsJAST.add_core_op('chain', -> $qastcomp, $op {
     # First, we build up the list of nodes in the chain
     my @clist;
-    my $cpast := $op;
-    while nqp::istype($cpast, QAST::Op) && $cpast.op eq 'chain' {
-        nqp::push(@clist, $cpast);
-        $cpast := $cpast[0];
+    my $c_ast := $op;
+    while nqp::istype($c_ast, QAST::Op) && $c_ast.op eq 'chain' {
+        nqp::push(@clist, $c_ast);
+        $c_ast := $c_ast[0];
     }
 
     my $il       := JAST::InstructionList.new();
     my $result   := $*TA.fresh_o();
     my $endlabel := JAST::Label.new(:name($qastcomp.unique('chain_end_')));
 
-    $cpast := nqp::pop(@clist);
-    my $apast := $cpast[0];
-    my $ares  := $qastcomp.as_jast($apast, :want($RT_OBJ));
+    $c_ast := nqp::pop(@clist);
+    my $a_ast := $c_ast[0];
+    my $ares  := $qastcomp.as_jast($a_ast, :want($RT_OBJ));
     my $atmp  := $*TA.fresh_o();
     $il.append($ares.jast);
     $*STACK.obtain($il, $ares);
@@ -463,8 +463,8 @@ QAST::OperationsJAST.add_core_op('chain', -> $qastcomp, $op {
 
     my $more := 1;
     while $more {
-        my $bpast := $cpast[1];
-        my $bres  := $qastcomp.as_jast($bpast, :want($RT_OBJ));
+        my $b_ast := $c_ast[1];
+        my $bres  := $qastcomp.as_jast($b_ast, :want($RT_OBJ));
         my $btmp  := $*TA.fresh_o();
         $il.append($bres.jast);
         $*STACK.obtain($il, $bres);
@@ -472,7 +472,7 @@ QAST::OperationsJAST.add_core_op('chain', -> $qastcomp, $op {
 
         $*STACK.spill_to_locals($il);
         my $cs_idx := $*CODEREFS.get_callsite_idx([$ARG_OBJ, $ARG_OBJ], []);
-        $il.append(JAST::PushSVal.new( :value($cpast.name) )),
+        $il.append(JAST::PushSVal.new( :value($c_ast.name) )),
         $il.append(JAST::PushIndex.new( :value($cs_idx) )),
         $il.append($ALOAD_1);
         $il.append(JAST::Instruction.new( :op('aload'), $atmp ));
@@ -494,7 +494,7 @@ QAST::OperationsJAST.add_core_op('chain', -> $qastcomp, $op {
             $il.append($IVAL_ZERO);
             $il.append($LCMP);
             $il.append(JAST::Instruction.new( :op('ifeq'), $endlabel ));
-            $cpast := nqp::pop(@clist);
+            $c_ast := nqp::pop(@clist);
             $atmp := $btmp;
         }
         else {
@@ -751,6 +751,10 @@ for <if unless> -> $op_name {
         my $cond := $qastcomp.as_jast($op[0]);
         $il.append($cond.jast);
         $*STACK.obtain($il, $cond);
+        my $comp_ops1;
+        my $comp_ops2;
+        my $orig_type_op1;
+        my $orig_type_op2;
         if $im_then || $im_else {
             my $im_local := QAST::Node.unique('__IM_');
             $*BLOCK.add_local(QAST::Var.new(
@@ -758,15 +762,17 @@ for <if unless> -> $op_name {
                 :returns(typeobj_from_rttype($cond.type))
             ));
             if $im_then {
+                $orig_type_op1 := $op[1].blocktype;
                 $op[1].blocktype('declaration');
-                $op[1] := QAST::Op.new(
+                $comp_ops1 := QAST::Op.new(
                     :op('call'), $op[1],
                     QAST::Var.new( :name($im_local), :scope('local') )
                 );
             }
             if $im_else {
+                $orig_type_op2 := $op[2].blocktype;
                 $op[2].blocktype('declaration');
-                $op[2] := QAST::Op.new(
+                $comp_ops2 := QAST::Op.new(
                     :op('call'), $op[2],
                     QAST::Var.new( :name($im_local), :scope('local') )
                 );
@@ -787,7 +793,14 @@ for <if unless> -> $op_name {
             :op($op_name eq 'if' ?? 'ifeq' !! 'ifne')));
         
         # Compile the "then".
-        my $then := $qastcomp.as_jast($op[1]);
+        my $then;
+        if $im_then {
+            $then := $qastcomp.as_jast($comp_ops1);
+            $op[1].blocktype($orig_type_op1);
+        }
+        else {
+            $then := $qastcomp.as_jast($op[1]);
+        }
         $il.append($then.jast);
         
         # What comes next depends on whether there's an else.
@@ -798,7 +811,14 @@ for <if unless> -> $op_name {
             # is needed. It's fine as we don't append the else JAST
             # until later.
             $*STACK.obtain($il, $then);
-            my $else := $qastcomp.as_jast($op[2]);
+            my $else;
+            if $im_else {
+                $else := $qastcomp.as_jast($comp_ops2);
+                $op[2].blocktype($orig_type_op2);
+            }
+            else {
+                $else := $qastcomp.as_jast($op[2]);
+            }
             if $*WANT == $RT_VOID {
                 $il.append(pop_ins($then.type));
             }
@@ -896,10 +916,10 @@ QAST::OperationsJAST.add_core_op('xor', -> $qastcomp, $op {
     my $endlabel   := JAST::Label.new(:name($prefix ~ '_end'));
 
     my @childlist;
-    my $fpast;
+    my $f_ast;
     for $op.list {
         if $_.named eq 'false' {
-            $fpast := $_;
+            $f_ast := $_;
         }
         else {
             nqp::push(@childlist, $_);
@@ -913,8 +933,8 @@ QAST::OperationsJAST.add_core_op('xor', -> $qastcomp, $op {
     my $u := $*TA.fresh_i();
 
     my $il    := JAST::InstructionList.new();
-    my $apast := nqp::shift(@childlist);
-    my $ares := $qastcomp.as_jast($apast, :want($RT_OBJ));
+    my $a_ast := nqp::shift(@childlist);
+    my $ares := $qastcomp.as_jast($a_ast, :want($RT_OBJ));
     $il.append($ares.jast);
     $*STACK.obtain($il, $ares);
     $il.append($DUP);
@@ -927,8 +947,8 @@ QAST::OperationsJAST.add_core_op('xor', -> $qastcomp, $op {
     my $have_middle_child := 1;
     my $bres;
     while $have_middle_child {
-        my $bpast := nqp::shift(@childlist);
-        $bres := $qastcomp.as_jast($bpast, :want($RT_OBJ));
+        my $b_ast := nqp::shift(@childlist);
+        $bres := $qastcomp.as_jast($b_ast, :want($RT_OBJ));
         $il.append($bres.jast);
         $*STACK.obtain($il, $bres);
         $il.append($DUP);
@@ -968,8 +988,8 @@ QAST::OperationsJAST.add_core_op('xor', -> $qastcomp, $op {
     $il.append(JAST::Instruction.new( :op('goto'), $endlabel ));
     $il.append($falselabel);
 
-    if $fpast {
-        my $fres := $qastcomp.as_jast($fpast, :want($RT_OBJ));
+    if $f_ast {
+        my $fres := $qastcomp.as_jast($f_ast, :want($RT_OBJ));
         $il.append($fres.jast);
         $*STACK.obtain($il, $fres);
         $il.append(JAST::Instruction.new( :op('astore'), $r ));
@@ -1018,6 +1038,7 @@ for ('', 'repeat_') -> $repness {
             # Check if we need a handler and operand count.
             my $handler := 1;
             my @operands;
+            my $orig_type;
             for $op.list {
                 if $_.named eq 'nohandler' { $handler := 0; }
                 else { @operands.push($_) }
@@ -1043,7 +1064,7 @@ for ('', 'repeat_') -> $repness {
             my $nr_handler_id;
             if $handler {
                 $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST);
-                $nr_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT + $EX_CAT_REDO)
+                $nr_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT +| $EX_CAT_REDO);
             }
             
             # Emit loop prelude, evaluating condition. 
@@ -1064,6 +1085,7 @@ for ('', 'repeat_') -> $repness {
                     :name($im_local),
                     :returns(typeobj_from_rttype($cond_res.type))
                 ));
+                $orig_type := @operands[1].blocktype;
                 @operands[1].blocktype('declaration');
                 @operands[1] := QAST::Op.new(
                     :op('call'), @operands[1],
@@ -1072,16 +1094,10 @@ for ('', 'repeat_') -> $repness {
                 $testil.append(dup_ins($cond_res.type));
                 $testil.append(JAST::Instruction.new( :op(store_ins($cond_res.type)), $im_local ));
             }
-            
-            # Compile loop body, then do any analysis of result type if
-            # in non-void context.
-            my $body_res := $qastcomp.as_jast_in_handler(@operands[1], $nr_handler_id || $*HANDLER_IDX);
             my $res;
             my $res_type;
             if $*WANT != $RT_VOID {
-                $res_type := $cond_res.type == $body_res.type
-                    ?? $cond_res.type
-                    !! $RT_OBJ;
+                $res_type := $cond_res.type;
                 $res := $*TA."fresh_{typechar($res_type)}"();
             }
             
@@ -1099,18 +1115,14 @@ for ('', 'repeat_') -> $repness {
                 :op($op_name eq 'while' ?? 'ifeq' !! 'ifne')));
 
             # Emit the loop body; stash the result if needed.
+            my $body_res := $qastcomp.as_jast_in_handler(@operands[1], $nr_handler_id || $*HANDLER_IDX);
+            @operands[1][0].blocktype($orig_type) if $orig_type;
             my $il := JAST::InstructionList.new();
             $il.append($redo_lbl);
             my $body_il := JAST::InstructionList.new();
             $body_il.append($body_res.jast);
             $*STACK.obtain($body_il, $body_res);
-            if $res {
-                $body_il.append($qastcomp.coercion($body_res, $res_type));
-                $body_il.append(JAST::Instruction.new( :op(store_ins($res_type)), $res ));
-            }
-            else {
-                $body_il.append(pop_ins($body_res.type));
-            }
+            $body_il.append(pop_ins($body_res.type));
             
             # Add redo and next handler if needed.
             if $handler {
@@ -1264,13 +1276,10 @@ QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     for @val_temps {
         $inv_ast.push(QAST::Var.new( :name($_), :scope('local') ));
     }
-    my $inv_res := $qastcomp.as_jast($inv_ast, :want($res ?? $RT_OBJ !! $RT_VOID));
+    my $inv_res := $qastcomp.as_jast($inv_ast, :want($RT_VOID));
     my $inv_il := JAST::InstructionList.new();
     $inv_il.append($inv_res.jast);
     $*STACK.obtain($inv_il, $inv_res);
-    if $res {
-        $inv_il.append(JAST::Instruction.new( :op('astore'), $res ));
-    }
 
     # Wrap block invocation in redo handler if needed.
     if $handler {
@@ -1775,6 +1784,8 @@ QAST::OperationsJAST.add_hll_unbox('', $RT_STR, -> $qastcomp {
 QAST::OperationsJAST.map_classlib_core_op('ctx', $TYPE_OPS, 'ctx', [], $RT_OBJ, :tc, :!inlinable);
 QAST::OperationsJAST.map_classlib_core_op('ctxouter', $TYPE_OPS, 'ctxouter', [$RT_OBJ], $RT_OBJ, :tc, :!inlinable);
 QAST::OperationsJAST.map_classlib_core_op('ctxcaller', $TYPE_OPS, 'ctxcaller', [$RT_OBJ], $RT_OBJ, :tc, :!inlinable);
+QAST::OperationsJAST.map_classlib_core_op('ctxouterskipthunks', $TYPE_OPS, 'ctxouterskipthunks', [$RT_OBJ], $RT_OBJ, :tc, :!inlinable);
+QAST::OperationsJAST.map_classlib_core_op('ctxcallerskipthunks', $TYPE_OPS, 'ctxcallerskipthunks', [$RT_OBJ], $RT_OBJ, :tc, :!inlinable);
 QAST::OperationsJAST.map_classlib_core_op('curcode', $TYPE_OPS, 'curcode', [], $RT_OBJ, :tc, :!inlinable);
 QAST::OperationsJAST.map_classlib_core_op('callercode', $TYPE_OPS, 'callercode', [], $RT_OBJ, :tc, :!inlinable);
 QAST::OperationsJAST.map_classlib_core_op('ctxlexpad', $TYPE_OPS, 'ctxlexpad', [$RT_OBJ], $RT_OBJ, :tc, :!inlinable);
@@ -1950,6 +1961,7 @@ QAST::OperationsJAST.map_classlib_core_op('closedir', $TYPE_OPS, 'closedir', [$R
 QAST::OperationsJAST.map_classlib_core_op('openasync', $TYPE_OPS, 'openasync', [$RT_STR, $RT_STR], $RT_OBJ, :tc);
 QAST::OperationsJAST.map_classlib_core_op('slurpasync', $TYPE_OPS, 'slurpasync', [$RT_OBJ, $RT_OBJ, $RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
 QAST::OperationsJAST.map_classlib_core_op('linesasync', $TYPE_OPS, 'linesasync', [$RT_OBJ, $RT_OBJ, $RT_INT, $RT_OBJ, $RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('spurtasync', $TYPE_OPS, 'spurtasync', [$RT_OBJ, $RT_OBJ, $RT_OBJ, $RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
 
 QAST::OperationsJAST.map_classlib_core_op('socket', $TYPE_OPS, 'socket', [$RT_INT], $RT_OBJ, :tc);
 QAST::OperationsJAST.map_classlib_core_op('connect', $TYPE_OPS, 'connect', [$RT_OBJ, $RT_STR, $RT_INT], $RT_OBJ, :tc);
@@ -2463,9 +2475,31 @@ QAST::OperationsJAST.map_classlib_core_op('getenvhash', $TYPE_OPS, 'getenvhash',
 QAST::OperationsJAST.map_classlib_core_op('getpid', $TYPE_OPS, 'getpid', [], $RT_INT, :tc);
 QAST::OperationsJAST.map_classlib_core_op('jvmgetproperties', $TYPE_OPS, 'jvmgetproperties', [], $RT_OBJ, :tc);
 
+# thread related opcodes
+QAST::OperationsJAST.map_classlib_core_op('newthread', $TYPE_OPS, 'newthread', [$RT_OBJ, $RT_INT], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('threadrun', $TYPE_OPS, 'threadrun', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('threadjoin', $TYPE_OPS, 'threadjoin', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('threadid', $TYPE_OPS, 'threadid', [$RT_OBJ], $RT_INT, :tc);
+QAST::OperationsJAST.map_classlib_core_op('threadyield', $TYPE_OPS, 'threadyield', [], $RT_INT, :tc);
+QAST::OperationsJAST.map_classlib_core_op('currentthread', $TYPE_OPS, 'currentthread', [], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('lock', $TYPE_OPS, 'lock', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('unlock', $TYPE_OPS, 'unlock', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('getlockcondvar', $TYPE_OPS, 'getlockcondvar', [$RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('condwait', $TYPE_OPS, 'condwait', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('condsignalone', $TYPE_OPS, 'condsignalone', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('condsignalall', $TYPE_OPS, 'condsignalall', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('semacquire', $TYPE_OPS, 'semacquire', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('semtryacquire', $TYPE_OPS, 'semtryacquire', [$RT_OBJ], $RT_INT, :tc);
+QAST::OperationsJAST.map_classlib_core_op('semrelease', $TYPE_OPS, 'semrelease', [$RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('queuepoll', $TYPE_OPS, 'queuepoll', [$RT_OBJ], $RT_OBJ, :tc);
+
+# asynchrony related ops
+QAST::OperationsJAST.map_classlib_core_op('timer', $TYPE_OPS, 'timer', [$RT_OBJ, $RT_OBJ, $RT_INT, $RT_INT, $RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('cancel', $TYPE_OPS, 'cancel', [$RT_OBJ], $RT_OBJ, :tc);
+
 # JVM-specific ops for compilation unit handling
-QAST::OperationsJAST.map_classlib_core_op('compilejastlines', $TYPE_OPS, 'compilejastlines', [$RT_OBJ], $RT_OBJ, :tc);
-QAST::OperationsJAST.map_classlib_core_op('compilejastlinestofile', $TYPE_OPS, 'compilejastlinestofile', [$RT_OBJ, $RT_STR], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('compilejast', $TYPE_OPS, 'compilejast', [$RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
+QAST::OperationsJAST.map_classlib_core_op('compilejasttofile', $TYPE_OPS, 'compilejasttofile', [$RT_OBJ, $RT_OBJ, $RT_STR], $RT_OBJ, :tc);
 QAST::OperationsJAST.map_classlib_core_op('loadcompunit', $TYPE_OPS, 'loadcompunit', [$RT_OBJ, $RT_INT], $RT_OBJ, :tc);
 QAST::OperationsJAST.map_classlib_core_op('iscompunit', $TYPE_OPS, 'iscompunit', [$RT_OBJ], $RT_INT, :tc);
 QAST::OperationsJAST.map_classlib_core_op('compunitmainline', $TYPE_OPS, 'compunitmainline', [$RT_OBJ], $RT_OBJ, :tc);
@@ -2489,7 +2523,7 @@ QAST::OperationsJAST.map_classlib_core_op('backendconfig', $TYPE_OPS, 'jvmgetcon
 QAST::OperationsJAST.map_classlib_core_op('initnativecall', $TYPE_NATIVE_OPS, 'init', [], $RT_INT);
 QAST::OperationsJAST.map_classlib_core_op('buildnativecall', $TYPE_NATIVE_OPS, 'build', [$RT_OBJ, $RT_STR, $RT_STR, $RT_STR, $RT_OBJ, $RT_OBJ], $RT_INT, :tc);
 QAST::OperationsJAST.map_classlib_core_op('nativecall', $TYPE_NATIVE_OPS, 'call', [$RT_OBJ, $RT_OBJ, $RT_OBJ], $RT_OBJ, :tc);
-QAST::OperationsJAST.map_classlib_core_op('nativecallrefresh', $TYPE_NATIVE_OPS, 'refresh', [$RT_OBJ], $RT_INT);
+QAST::OperationsJAST.map_classlib_core_op('nativecallrefresh', $TYPE_NATIVE_OPS, 'refresh', [$RT_OBJ], $RT_INT, :tc);
 
 class QAST::CompilerJAST {
     # Responsible for handling issues around code references, building the
@@ -2693,7 +2727,7 @@ class QAST::CompilerJAST {
                 nqp::die("Lexical '$name' already declared");
             }
             %!lexical_types{$name} := $type;
-            %!lexical_idxs{$name} := +@!lexical_names[$type];
+            %!lexical_idxs{$name} := nqp::elems(@!lexical_names[$type]);
             nqp::push(@!lexical_names[$type], $name);
         }
         
@@ -3668,9 +3702,12 @@ class QAST::CompilerJAST {
                 $*JMETH.append($resume);
             }
             
-            # Set exit handler flag if needed.
+            # Set exit handler and thunk flags if needed.
             if $node.has_exit_handler {
                 $*JMETH.has_exit_handler(1);
+            }
+            if $node.is_thunk {
+                $*JMETH.is_thunk(1);
             }
             
             # Finalize method and add it to the class.

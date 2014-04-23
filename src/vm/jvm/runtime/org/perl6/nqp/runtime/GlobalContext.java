@@ -5,6 +5,7 @@ import java.io.PrintStream;
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Timer;
 import java.util.WeakHashMap;
 
 import org.perl6.nqp.sixmodel.CodePairContainerConfigurer;
@@ -85,6 +86,11 @@ public class GlobalContext {
      */
     public SixModelObject CallCapture;
     
+     /**
+     * Thread type; a basic, method-less type with the Thread REPR.
+     */
+    public SixModelObject Thread;
+
     /**
      * BOOTException type; a basic, method-less type with the VMException REPR. 
      */
@@ -117,6 +123,11 @@ public class GlobalContext {
      */
     public ThreadContext mainThread;
     
+    /**
+     * Timer object, used by nqp::timer.
+     */
+    public Timer timer;
+
     /**
      * Active HLL configuration (maps HLL name to the configuration).
      */
@@ -167,6 +178,12 @@ public class GlobalContext {
      * Whether to dump VM-level stack traces for all exceptions.
      */
     public boolean noisyExceptions;
+
+    /**
+     * The global ByteClassLoader instance, used to load classes generated at
+     * runtime.
+     */
+    public ByteClassLoader byteClassLoader;
 
     /** Redirected output for eval-server. */
     public PrintStream out = System.out;
@@ -220,6 +237,7 @@ public class GlobalContext {
         allThreads = new WeakHashMap< >();
 
         mainThread = getCurrentThreadContext();
+        timer = new Timer(true);
         KnowHOWBootstrapper.bootstrap(mainThread);
         bootInterop = new BootJavaInterop(this);
         
@@ -231,6 +249,8 @@ public class GlobalContext {
 
         hllGlobalAll = new HashMap<ContextKey<?,?>, Object>();
         hllGlobalAllLock = new Object();
+
+        byteClassLoader = new ByteClassLoader();
     }
     
     /**
@@ -302,7 +322,7 @@ public class GlobalContext {
         if (tcRef != null) return tcRef.get();
 
         ThreadContext tc = new ThreadContext(this);
-        synchronized(this) { allThreads.put(Thread.currentThread(), tc); }
+        synchronized(this) { allThreads.put(java.lang.Thread.currentThread(), tc); }
         currentThreadCtxRef.set(new WeakReference< >(tc));
         return tc;
     }

@@ -10,6 +10,7 @@ import org.perl6.nqp.sixmodel.reprs.Continuation;
 import org.perl6.nqp.sixmodel.reprs.CArray;
 import org.perl6.nqp.sixmodel.reprs.CPointer;
 import org.perl6.nqp.sixmodel.reprs.CStr;
+import org.perl6.nqp.sixmodel.reprs.CStruct;
 import org.perl6.nqp.sixmodel.reprs.IOHandle;
 import org.perl6.nqp.sixmodel.reprs.JavaWrap;
 import org.perl6.nqp.sixmodel.reprs.KnowHOWAttribute;
@@ -29,6 +30,12 @@ import org.perl6.nqp.sixmodel.reprs.VMArray;
 import org.perl6.nqp.sixmodel.reprs.VMException;
 import org.perl6.nqp.sixmodel.reprs.VMHash;
 import org.perl6.nqp.sixmodel.reprs.VMIter;
+import org.perl6.nqp.sixmodel.reprs.VMThread;
+import org.perl6.nqp.sixmodel.reprs.ReentrantMutex;
+import org.perl6.nqp.sixmodel.reprs.Semaphore;
+import org.perl6.nqp.sixmodel.reprs.ConcBlockingQueue;
+import org.perl6.nqp.sixmodel.reprs.ConditionVariable;
+import org.perl6.nqp.sixmodel.reprs.AsyncTask;
 
 public class REPRRegistry {
     private static HashMap<String, Integer> reprIdMap = new HashMap<String, Integer>();
@@ -82,5 +89,12 @@ public class REPRRegistry {
         addREPR("CPointer", new CPointer());
         addREPR("CArray", new CArray());
         addREPR("CStr", new CStr());
+        addREPR("CStruct", new CStruct());
+        addREPR("VMThread", new VMThread());
+        addREPR("ReentrantMutex", new ReentrantMutex());
+        addREPR("Semaphore", new Semaphore());
+        addREPR("ConcBlockingQueue", new ConcBlockingQueue());
+        addREPR("ConditionVariable", new ConditionVariable());
+        addREPR("AsyncTask", new AsyncTask());
     }
 }

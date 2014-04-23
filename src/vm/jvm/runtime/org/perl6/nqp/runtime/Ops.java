@@ -27,11 +27,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.TimerTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.net.InetAddress;
@@ -39,6 +39,7 @@ import java.net.InetAddress;
 import org.perl6.nqp.io.AsyncFileHandle;
 import org.perl6.nqp.io.FileHandle;
 import org.perl6.nqp.io.IIOAsyncReadable;
+import org.perl6.nqp.io.IIOAsyncWritable;
 import org.perl6.nqp.io.IIOClosable;
 import org.perl6.nqp.io.IIOEncodable;
 import org.perl6.nqp.io.IIOInteractive;
@@ -51,7 +52,7 @@ import org.perl6.nqp.io.ServerSocketHandle;
 import org.perl6.nqp.io.SocketHandle;
 import org.perl6.nqp.io.StandardReadHandle;
 import org.perl6.nqp.io.StandardWriteHandle;
-import org.perl6.nqp.jast2bc.JASTToJVMBytecode;
+import org.perl6.nqp.jast2bc.JASTCompiler;
 import org.perl6.nqp.sixmodel.BoolificationSpec;
 import org.perl6.nqp.sixmodel.ContainerConfigurer;
 import org.perl6.nqp.sixmodel.ContainerSpec;
@@ -79,13 +80,21 @@ import org.perl6.nqp.sixmodel.reprs.SCRefInstance;
 import org.perl6.nqp.sixmodel.reprs.VMArray;
 import org.perl6.nqp.sixmodel.reprs.VMArrayInstance;
 import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_i16;
+import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_u16;
 import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_i32;
+import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_u32;
 import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_i8;
 import org.perl6.nqp.sixmodel.reprs.VMArrayInstance_u8;
 import org.perl6.nqp.sixmodel.reprs.VMExceptionInstance;
 import org.perl6.nqp.sixmodel.reprs.VMHash;
 import org.perl6.nqp.sixmodel.reprs.VMHashInstance;
 import org.perl6.nqp.sixmodel.reprs.VMIterInstance;
+import org.perl6.nqp.sixmodel.reprs.VMThreadInstance;
+import org.perl6.nqp.sixmodel.reprs.ReentrantMutexInstance;
+import org.perl6.nqp.sixmodel.reprs.SemaphoreInstance;
+import org.perl6.nqp.sixmodel.reprs.ConcBlockingQueueInstance;
+import org.perl6.nqp.sixmodel.reprs.ConditionVariable;
+import org.perl6.nqp.sixmodel.reprs.ConditionVariableInstance;
 
 /**
  * Contains complex operations that are more involved that the simple ops that the
@@ -674,7 +683,23 @@ public final class Ops {
         }
         return obj;
     }
-    
+
+    public static SixModelObject spurtasync(SixModelObject obj, SixModelObject resultType, SixModelObject data,
+            SixModelObject done, SixModelObject error, ThreadContext tc) {
+        if (obj instanceof IOHandleInstance) {
+            IOHandleInstance h = (IOHandleInstance)obj;
+            if (h.handle instanceof IIOAsyncWritable)
+                ((IIOAsyncWritable)h.handle).spurt(tc, resultType, data, done, error);
+            else
+                throw ExceptionHandling.dieInternal(tc,
+                    "This handle does not support async spurt");
+        }
+        else {
+            die_s("spurtasync requires an object with the IOHandle REPR", tc);
+        }
+        return obj;
+    }
+
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public static SixModelObject linesasync(SixModelObject obj, SixModelObject resultType,
             long chomp, SixModelObject queue, SixModelObject done, SixModelObject error,
@@ -815,7 +840,7 @@ public final class Ops {
         Path before_o = Paths.get(before);
         Path after_o = Paths.get(after);
         try {
-            Files.createLink(before_o, after_o);
+            Files.createLink(after_o, before_o);
         }
         catch (Exception e) {
             die_s(IOExceptionMessages.message(e), tc);
@@ -939,7 +964,7 @@ public final class Ops {
         Path before_o = Paths.get(before);
         Path after_o = Paths.get(after);
         try {
-            Files.createSymbolicLink(before_o, after_o);
+            Files.createSymbolicLink(after_o, before_o);
         }
         catch (Exception e) {
             die_s(IOExceptionMessages.message(e), tc);
@@ -1270,6 +1295,40 @@ public final class Ops {
     public static SixModelObject ctxcaller(SixModelObject ctx, ThreadContext tc) {
         if (ctx instanceof ContextRefInstance) {
             CallFrame caller = ((ContextRefInstance)ctx).context.caller;
+            if (caller == null)
+                return null;
+            
+            SixModelObject ContextRef = tc.gc.ContextRef;
+            SixModelObject wrap = ContextRef.st.REPR.allocate(tc, ContextRef.st);
+            ((ContextRefInstance)wrap).context = caller;
+            return wrap;
+        }
+        else {
+            throw ExceptionHandling.dieInternal(tc, "ctxcaller requires an operand with REPR ContextRef");
+        }
+    }
+    public static SixModelObject ctxouterskipthunks(SixModelObject ctx, ThreadContext tc) {
+        if (ctx instanceof ContextRefInstance) {
+            CallFrame outer = ((ContextRefInstance)ctx).context.outer;
+            while (outer != null && outer.codeRef.staticInfo.isThunk)
+                outer = outer.outer;
+            if (outer == null)
+                return null;
+
+            SixModelObject ContextRef = tc.gc.ContextRef;
+            SixModelObject wrap = ContextRef.st.REPR.allocate(tc, ContextRef.st);
+            ((ContextRefInstance)wrap).context = outer;
+            return wrap;
+        }
+        else {
+            throw ExceptionHandling.dieInternal(tc, "ctxouter requires an operand with REPR ContextRef");
+        }
+    }
+    public static SixModelObject ctxcallerskipthunks(SixModelObject ctx, ThreadContext tc) {
+        if (ctx instanceof ContextRefInstance) {
+            CallFrame caller = ((ContextRefInstance)ctx).context.caller;
+            while (caller != null && caller.codeRef.staticInfo.isThunk)
+                caller = caller.caller;
             if (caller == null)
                 return null;
             
@@ -2990,18 +3049,11 @@ public final class Ops {
         return valA + valB;
     }
 
-    public static String chr(long val, ThreadContext tc) {
-        // http://en.wikipedia.org/wiki/Mapping_of_Unicode_characters 
-        if ((val >= 0xfdd0
-            && (val <= 0xfdef                     // non character
-                || ((val & 0xfffe) == 0xfffe)     // non character
-                || val > 0x10ffff)                // out of range
-            )
-        || (val >= 0xd800 && val <= 0xdfff)       // surrogate
-        ) {
-            throw ExceptionHandling.dieInternal(tc, "Invalid code-point U+" + String.format("%05X", val));
-        }
-        return (new StringBuffer()).append(Character.toChars((int)val)).toString();
+    public static String chr(long ord, ThreadContext tc) {
+	if (ord < 0)
+	    throw ExceptionHandling.dieInternal(tc, "chr codepoint cannot be negative");
+
+        return (new StringBuffer()).append(Character.toChars((int)ord)).toString();
     }
    
     public static String join(String delimiter, SixModelObject arr, ThreadContext tc) {
@@ -3307,21 +3359,40 @@ public final class Ops {
         else if (encoding.equals("iso-8859-1")) {
             return decode8(buf, "ISO-8859-1", tc);
         }
-        else if (encoding.equals("utf16")) {
+        else if (encoding.equals("utf16") || encoding.equals("utf32")) {
             int n = (int)buf.elems(tc);
             StringBuilder sb = new StringBuilder(n);
-            for (int i = 0; i < n; i++) {
-                buf.at_pos_native(tc, i);
-                sb.append((char)tc.native_i);
+            if (buf instanceof VMArrayInstance_u8 || buf instanceof VMArrayInstance_i8) {
+                if (encoding.equals("utf16") && n % 2 == 1) {
+                    throw ExceptionHandling.dieInternal(tc, "Malformed UTF-16; odd number of bytes");
+                }
+                if (encoding.equals("utf32") && n % 4 > 0) {
+                    throw ExceptionHandling.dieInternal(tc, "Malformed UTF-32; number of bytes must be factor of four");
+                }
+                for (int i = 0; i < n;) {
+                    buf.at_pos_native(tc, i++);
+                    int a = (int)tc.native_i;
+                    buf.at_pos_native(tc, i++);
+                    int b = (int)tc.native_i;
+                    sb.appendCodePoint(a + (b << 8));
+                }
             }
-            return sb.toString();
-        }
-        else if (encoding.equals("utf32")) {
-            int n = (int)buf.elems(tc);
-            StringBuilder sb = new StringBuilder(n);
-            for (int i = 0; i < n; i++) {
-                buf.at_pos_native(tc, i);
-                sb.appendCodePoint((int)tc.native_i);
+            else if (buf instanceof VMArrayInstance_i16 || buf instanceof VMArrayInstance_u16) {
+                for (int i = 0; i < n; i++) {
+                    buf.at_pos_native(tc, i);
+                    sb.appendCodePoint((int)tc.native_i);
+                }
+            }
+            else if (buf instanceof VMArrayInstance_i32 || buf instanceof VMArrayInstance_u32) {
+                for (int i = 0; i < n; i++) {
+                    buf.at_pos_native(tc, i);
+                    int a = (int)tc.native_i;
+                    sb.appendCodePoint(a & 0xFFFF);
+                    sb.appendCodePoint(a >> 16);
+                }
+            }
+            else {
+                throw ExceptionHandling.dieInternal(tc, "Unknown buf type: " + buf.getClass() + "/" + Ops.typeName(buf, tc));
             }
             return sb.toString();
         }
@@ -4160,6 +4231,196 @@ public final class Ops {
         return res;
     }
     
+    /* Thread related. */
+    static class CodeRunnable implements Runnable {
+        private GlobalContext gc;
+        private SixModelObject vmthread;
+        private SixModelObject code;
+
+        public CodeRunnable(GlobalContext gc, SixModelObject vmthread, SixModelObject code) {
+            this.gc = gc;
+            this.vmthread = vmthread;
+            this.code = code;
+        }
+        
+        public void run() {
+            ThreadContext tc = gc.getCurrentThreadContext();
+            tc.VMThread = vmthread;
+            invokeArgless(tc, code);
+        }
+    }
+    public static SixModelObject newthread(SixModelObject code, long appLifetime, ThreadContext tc) {
+        SixModelObject thread = tc.gc.Thread.st.REPR.allocate(tc, tc.gc.Thread.st);
+        ((VMThreadInstance)thread).thread = new Thread(new CodeRunnable(tc.gc, thread, code));
+        ((VMThreadInstance)thread).thread.setDaemon(appLifetime != 0);
+        return thread;
+    }
+
+    public static SixModelObject threadrun(SixModelObject thread, ThreadContext tc) {
+        if (thread instanceof VMThreadInstance)
+            ((VMThreadInstance)thread).thread.start();
+        else
+            throw ExceptionHandling.dieInternal(tc, "threadrun requires an operand with REPR VMThread");
+        return thread;
+    }
+
+    public static SixModelObject threadjoin(SixModelObject thread, ThreadContext tc) {
+        if (thread instanceof VMThreadInstance) {
+            try {
+                ((VMThreadInstance)thread).thread.join();
+            }
+            catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        else {
+            throw ExceptionHandling.dieInternal(tc, "threadjoin requires an operand with REPR VMThread");
+        }
+        return thread;
+    }
+
+    public static long threadid(SixModelObject thread, ThreadContext tc) {
+        if (thread instanceof VMThreadInstance)
+            return ((VMThreadInstance)thread).thread.getId();
+        else
+            throw ExceptionHandling.dieInternal(tc, "threadid requires an operand with REPR VMThread");
+    }
+
+    public static long threadyield(ThreadContext tc) {
+        Thread.yield();
+        return 0;
+    }
+
+    public static SixModelObject currentthread(ThreadContext tc) {
+        SixModelObject thread = tc.VMThread;
+        if (thread == null) {
+            thread = tc.gc.Thread.st.REPR.allocate(tc, tc.gc.Thread.st);
+            ((VMThreadInstance)thread).thread = Thread.currentThread();
+            tc.VMThread = thread;
+        }
+        return thread;
+    }
+
+    public static SixModelObject lock(SixModelObject lock, ThreadContext tc) {
+        if (lock instanceof ReentrantMutexInstance)
+            ((ReentrantMutexInstance)lock).lock.lock();
+        else
+            throw ExceptionHandling.dieInternal(tc, "lock requires an operand with REPR ReentrantMutex");
+        return lock;
+    }
+
+    public static SixModelObject unlock(SixModelObject lock, ThreadContext tc) {
+        if (lock instanceof ReentrantMutexInstance)
+            ((ReentrantMutexInstance)lock).lock.unlock();
+        else
+            throw ExceptionHandling.dieInternal(tc, "unlock requires an operand with REPR ReentrantMutex");
+        return lock;
+    }
+
+    public static SixModelObject getlockcondvar(SixModelObject lock, SixModelObject type, ThreadContext tc) {
+        if (!(lock instanceof ReentrantMutexInstance))
+            throw ExceptionHandling.dieInternal(tc, "getlockcondvar requires an operand with REPR ReentrantMutex");
+        if (!(type.st.REPR instanceof ConditionVariable))
+            throw ExceptionHandling.dieInternal(tc, "getlockcondvar requires a result type with REPR ConditionVariable");
+        ConditionVariableInstance result = new ConditionVariableInstance();
+        result.st = type.st;
+        result.condvar = ((ReentrantMutexInstance)lock).lock.newCondition();
+        return result;
+    }
+
+    public static SixModelObject condwait(SixModelObject cv, ThreadContext tc) throws InterruptedException {
+        if (cv instanceof ConditionVariableInstance)
+            ((ConditionVariableInstance)cv).condvar.await();
+        else
+            throw ExceptionHandling.dieInternal(tc, "condwait requires an operand with REPR ConditionVariable");
+        return cv;
+    }
+
+    public static SixModelObject condsignalone(SixModelObject cv, ThreadContext tc) {
+        if (cv instanceof ConditionVariableInstance)
+            ((ConditionVariableInstance)cv).condvar.signal();
+        else
+            throw ExceptionHandling.dieInternal(tc, "condsignalone requires an operand with REPR ConditionVariable");
+        return cv;
+    }
+
+    public static SixModelObject condsignalall(SixModelObject cv, ThreadContext tc) {
+        if (cv instanceof ConditionVariableInstance)
+            ((ConditionVariableInstance)cv).condvar.signalAll();
+        else
+            throw ExceptionHandling.dieInternal(tc, "condsignalall requires an operand with REPR ConditionVariable");
+        return cv;
+    }
+
+    public static SixModelObject semacquire(SixModelObject sem, ThreadContext tc) {
+        try {
+            if (sem instanceof SemaphoreInstance)
+                ((SemaphoreInstance)sem).sem.acquire();
+            else
+                throw ExceptionHandling.dieInternal(tc, "semacquire requires an operand with REPR Semaphore");
+        } catch (InterruptedException e) {
+            throw ExceptionHandling.dieInternal(tc, "semacquire was interrupted");
+        }
+        return sem;
+    }
+
+    public static long semtryacquire(SixModelObject sem, ThreadContext tc) {
+        boolean result;
+        if (sem instanceof SemaphoreInstance)
+            result = ((SemaphoreInstance)sem).sem.tryAcquire();
+        else
+            throw ExceptionHandling.dieInternal(tc, "semtryacquire requires an operand with REPR Semaphore");
+
+        return result ? 1 : 0;
+    }
+
+    public static SixModelObject semrelease(SixModelObject sem, ThreadContext tc) {
+        if (sem instanceof SemaphoreInstance)
+            ((SemaphoreInstance)sem).sem.release();
+        else
+            throw ExceptionHandling.dieInternal(tc, "semrelease requires an operand with REPR Semaphore");
+        return sem;
+    }
+
+    public static SixModelObject queuepoll(SixModelObject queue, ThreadContext tc) {
+        if (queue instanceof ConcBlockingQueueInstance)
+            return ((ConcBlockingQueueInstance)queue).queue.poll();
+        else
+            throw ExceptionHandling.dieInternal(tc, "queuepoll requires an operand with REPR ConcBlockingQueue");
+    }
+
+    /* Asynchronousy operations. */
+
+    private static class AddToQueueTimerTask extends TimerTask {
+        private LinkedBlockingQueue<SixModelObject> queue;
+        private SixModelObject schedulee;
+
+        public AddToQueueTimerTask(LinkedBlockingQueue<SixModelObject> queue, SixModelObject schedulee) {
+            this.queue = queue;
+            this.schedulee = schedulee;
+        }
+
+        public void run() {
+            queue.add(schedulee);
+        }
+    }
+    public static SixModelObject timer(SixModelObject queue, SixModelObject schedulee,
+            long timeout, long repeat, SixModelObject handle_type, ThreadContext tc) {
+        if (!(queue instanceof ConcBlockingQueueInstance))
+            throw ExceptionHandling.dieInternal(tc, "timer's first argument should have REPR ConcBlockingQueue");
+        AddToQueueTimerTask tt = new AddToQueueTimerTask(((ConcBlockingQueueInstance)queue).queue, schedulee);
+        if (repeat > 0)
+            tc.gc.timer.scheduleAtFixedRate(tt, timeout, repeat);
+        else
+            tc.gc.timer.schedule(tt, timeout);
+        /* XXX TODO: cancellation handle. */
+        return handle_type;
+    }
+    public static SixModelObject cancel(SixModelObject handle, ThreadContext tc) {
+        /* XXX TODO: support cancellation. */
+        return handle;
+    }
+
     /* Exception related. */
     public static void die_s_c(String msg, ThreadContext tc) {
         // Construct exception object.
@@ -4258,6 +4519,8 @@ public final class Ops {
             SixModelObject result = Array.st.REPR.allocate(tc, Array.st);
 
             for (ExceptionHandling.TraceElement te : ExceptionHandling.backtrace(((VMExceptionInstance)obj))) {
+                if (te.frame.codeRef.staticInfo.isThunk)
+                    continue;
                 SixModelObject annots = Hash.st.REPR.allocate(tc, Hash.st);
                 if (te.file != null) annots.bind_key_boxed(tc, "file", box_s(te.file, Str, tc));
                 if (te.line >= 0) annots.bind_key_boxed(tc, "line", box_i(te.line, Int, tc));
@@ -5153,40 +5416,20 @@ public final class Ops {
     }
     
     /* Evaluation of code; JVM-specific ops. */
-    public static SixModelObject compilejastlines(SixModelObject dump, ThreadContext tc) {
-        if (dump instanceof VMArrayInstance) {
-            VMArrayInstance array = (VMArrayInstance) dump;
-            List<String> lines = new ArrayList<String>(array.elems);
-            for (int index = 0; index < array.elems; index++) {
-                lines.add(array.at_pos_boxed(tc, index).get_str(tc));
-            }
-            EvalResult res = new EvalResult();
-            res.jc = JASTToJVMBytecode.buildClassFromString(lines, false);
-            return res;
-        } else {
-            throw ExceptionHandling.dieInternal(tc,
-                "compilejastlines requires an array with the VMArrayInstance REPR");
-        }
+    public static SixModelObject compilejast(SixModelObject jast, SixModelObject jastNodes, ThreadContext tc) {
+        EvalResult res = new EvalResult();
+        res.jc = JASTCompiler.buildClass(jast, jastNodes, false, tc);
+        return res;
     }
-    public static SixModelObject compilejastlinestofile(SixModelObject dump, String filename, ThreadContext tc) {
-        if (dump instanceof VMArrayInstance) {
-            VMArrayInstance array = (VMArrayInstance) dump;
-            List<String> lines = new ArrayList<String>(array.elems);
-            for (int index = 0; index < array.elems; index++) {
-                lines.add(array.at_pos_boxed(tc, index).get_str(tc));
-            }
-            JASTToJVMBytecode.writeClassFromString(lines, filename);
-            return dump;
-        } else {
-            throw ExceptionHandling.dieInternal(tc,
-                "compilejastlines requires an array with the VMArrayInstance REPR");
-        }
+    public static SixModelObject compilejasttofile(SixModelObject jast, SixModelObject jastNodes, String filename, ThreadContext tc) {
+        JASTCompiler.writeClass(jast, jastNodes, filename, tc);
+        return jast;
     }
     public static SixModelObject loadcompunit(SixModelObject obj, long compileeHLL, ThreadContext tc) {
         try {
             EvalResult res = (EvalResult)obj;
-            ByteClassLoader cl = new ByteClassLoader(res.jc.bytes);
-            res.cu = (CompilationUnit)cl.findClass(res.jc.name).newInstance();
+            Class<?> cuClass = tc.gc.byteClassLoader.defineClass(res.jc.name, res.jc.bytes);
+            res.cu = (CompilationUnit) cuClass.newInstance();
             if (compileeHLL != 0)
                 usecompileehllconfig(tc);
             res.cu.initializeCompilationUnit(tc);
@@ -5273,7 +5516,17 @@ public final class Ops {
                 } else if (cont != null) {
                     invokeDirect(tc, run, invocantCallSite, false, new Object[] { cont });
                 } else {
-                    invokeDirect(tc, run, emptyCallSite, false, emptyArgList);
+                    if (run instanceof ResumeStatus) {
+                        /* Got a continuation to invoke immediately (done by
+                         * Rakudo cope with lack of tail calls). */
+                        ResumeStatus.Frame root = ((ResumeStatus)run).top;
+                        fixupContinuation(tc, root, null);
+                        root.resume();
+                    }
+                    else {
+                        /* Code a normal code ref to invoke. */
+                        invokeDirect(tc, run, emptyCallSite, false, emptyArgList);
+                    }
                 }
                 // If we get here, the reset argument or something placed using control returned normally
                 // so we should just return.
@@ -5330,20 +5583,20 @@ public final class Ops {
     public static void continuationinvoke(SixModelObject cont, SixModelObject arg, ThreadContext tc) throws Throwable {
         if (!(cont instanceof ResumeStatus))
             ExceptionHandling.dieInternal(tc, "applied continuationinvoke to non-continuation");
-
         ResumeStatus.Frame root = ((ResumeStatus)cont).top;
-
+        fixupContinuation(tc, root, arg);
+        root.resume();
+    }
+    private static void fixupContinuation(ThreadContext tc, ResumeStatus.Frame csr, SixModelObject arg) {
         // fixups: safe to do more than once, but not concurrently
         // these are why continuationclone is needed...
-        ResumeStatus.Frame csr = root;
         while (csr != null) {
             csr.tc = tc; // csr.callFrame.{csr,tc} will be set on resume
             if (csr.next == null) csr.thunk = arg;
             csr = csr.next;
         }
-
-        root.resume();
     }
+
     /* noop, exists only so you can set a breakpoint in it */
     public static SixModelObject debugnoop(SixModelObject in, ThreadContext tc) {
         return in;

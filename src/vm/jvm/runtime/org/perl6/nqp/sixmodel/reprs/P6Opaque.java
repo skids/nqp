@@ -14,7 +14,6 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.perl6.nqp.runtime.ExceptionHandling;
 import org.perl6.nqp.runtime.ThreadContext;
-import org.perl6.nqp.sixmodel.ByteClassLoader;
 import org.perl6.nqp.sixmodel.REPR;
 import org.perl6.nqp.sixmodel.STable;
 import org.perl6.nqp.sixmodel.SerializationReader;
@@ -129,6 +128,9 @@ public class P6Opaque extends REPR {
                             break;
                         case StorageSpec.BP_STR:
                             ((P6OpaqueREPRData)st.REPRData).unboxStrSlot = curAttr;
+                            break;
+                        default:
+                            ((P6OpaqueREPRData)st.REPRData).unboxObjSlot = curAttr;
                             break;
                         }
                     }
@@ -624,7 +626,7 @@ public class P6Opaque extends REPR {
 //            fos.close();
 //        } catch (IOException e) {
 //        }
-        return new ByteClassLoader(classCompiled).findClass(className);
+        return tc.gc.byteClassLoader.defineClass(className, classCompiled);
     }
 
     private void generateDelegateMethod(ThreadContext tc, ClassWriter cw, String className, String field, String methodName) {
@@ -751,13 +753,9 @@ public class P6Opaque extends REPR {
         REPRData.unboxNumSlot = (int)reader.readLong();
         REPRData.unboxStrSlot = (int)reader.readLong();
         
-        // Read unbox type map.
+        // Read unbox object slot, if there is one.
         if (reader.readLong() != 0) {
-            // Don't actually support this yet.
-            for (int i = 0; i < numAttributes; i++) {
-                reader.readLong();
-                reader.readLong();
-            }
+            REPRData.unboxObjSlot = (int)reader.readLong();
         }
         
         // Read in the name to index mapping.
@@ -800,7 +798,7 @@ public class P6Opaque extends REPR {
             else
                 info.st = tc.gc.KnowHOW.st; // Any reference type will do
             info.boxTarget = i == REPRData.unboxIntSlot || i == REPRData.unboxNumSlot ||
-                    i == REPRData.unboxStrSlot;
+                    i == REPRData.unboxStrSlot || i == REPRData.unboxObjSlot;
             info.posDelegate = i == REPRData.posDelSlot;
             info.assDelegate = i == REPRData.assDelSlot;
             info.hasAutoVivContainer = REPRData.autoVivContainers[i] != null;
@@ -847,8 +845,14 @@ public class P6Opaque extends REPR {
         writer.writeInt(REPRData.unboxNumSlot);
         writer.writeInt(REPRData.unboxStrSlot);
         
-        // TODO: Unbox slots
-        writer.writeInt(0);
+        // Unbox slots
+        if (REPRData.unboxObjSlot != -1) {
+            writer.writeInt(1);
+            writer.writeInt(REPRData.unboxObjSlot);
+        }
+        else {
+            writer.writeInt(0);
+        }
         
         int numClasses = REPRData.classHandles.length;
         writer.writeInt(numClasses);

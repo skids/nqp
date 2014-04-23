@@ -1,17 +1,14 @@
 package org.perl6.nqp.runtime;
 
-import java.lang.annotation.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodHandles.Lookup;
-import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.perl6.nqp.sixmodel.STable;
-import org.perl6.nqp.sixmodel.SixModelObject;
 
 /**
  * All compilation units inherit from this class. A compilation unit contains
@@ -97,6 +94,7 @@ public abstract class CompilationUnit {
                 m.handlers, ann.argsExpectation());
             cr.staticInfo.methodName = m.methodName;
             cr.staticInfo.hasExitHandler = ann.hasExitHandler();
+            cr.staticInfo.isThunk = ann.isThunk();
             cr.st = BOOTCodeSTable;
             codeRefList.add(cr);
 

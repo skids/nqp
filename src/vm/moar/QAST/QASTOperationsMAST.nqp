@@ -928,8 +928,10 @@ for ('', 'repeat_') -> $repness {
             my @children;
             my $handler := 1;
             my $orig_type;
+            my $label;
             for $op.list {
                 if $_.named eq 'nohandler' { $handler := 0; }
+                elsif $_.named eq 'label' { $label := $_; }
                 else { nqp::push(@children, $_) }
             }
             if needs_cond_passed(@children[1]) {
@@ -1046,8 +1048,37 @@ for ('', 'repeat_') -> $repness {
                     :action($HandlerAction::unwind_and_goto),
                     :goto($done_lbl)
                 )];
-                nqp::push(@last_il, $done_lbl);
-                MAST::InstructionList.new(@last_il, $res_reg, $res_kind)
+
+                if $label {
+                    my $where := nqp::where($label.value);
+                    my @redo_label_il := [MAST::HandlerScope.new(
+                        :instructions(@last_il),
+                        :category_mask($HandlerCategory::redo + $HandlerCategory::labeled),
+                        :action($HandlerAction::unwind_and_goto),
+                        :goto($redo_lbl),
+                        :label($where)
+                    )];
+                    my @next_label_il := [MAST::HandlerScope.new(
+                        :instructions(@redo_label_il),
+                        :category_mask($HandlerCategory::next + $HandlerCategory::labeled),
+                        :action($HandlerAction::unwind_and_goto),
+                        :goto($operands == 3 ?? $next_lbl !! $test_lbl),
+                        :label($where)
+                    )];
+                    my @last_label_il := [MAST::HandlerScope.new(
+                        :instructions(@next_label_il),
+                        :category_mask($HandlerCategory::last + $HandlerCategory::labeled),
+                        :action($HandlerAction::unwind_and_goto),
+                        :goto($done_lbl),
+                        :label($where)
+                    )];
+                    nqp::push(@last_label_il, $done_lbl);
+                    MAST::InstructionList.new(@last_label_il, $res_reg, $res_kind)
+                }
+                else {
+                    nqp::push(@last_il, $done_lbl);
+                    MAST::InstructionList.new(@last_il, $res_reg, $res_kind)
+                }
             }
             else {
                 nqp::push(@loop_il, $done_lbl);
@@ -1060,8 +1091,10 @@ for ('', 'repeat_') -> $repness {
 QAST::MASTOperations.add_core_op('for', -> $qastcomp, $op {
     my $handler := 1;
     my @operands;
+    my $label;
     for $op.list {
         if $_.named eq 'nohandler' { $handler := 0; }
+        elsif $_.named eq 'label' { $label := $_; }
         else { @operands.push($_) }
     }
 
@@ -1146,6 +1179,30 @@ QAST::MASTOperations.add_core_op('for', -> $qastcomp, $op {
             :action($HandlerAction::unwind_and_goto),
             :goto($lbl_next)
         )];
+        if $label {
+            my $where := nqp::where($label.value);
+            @ins_wrap := [MAST::HandlerScope.new(
+                :instructions(@ins_wrap),
+                :category_mask($HandlerCategory::redo_label),
+                :action($HandlerAction::unwind_and_goto),
+                :goto($lbl_redo),
+                :label($where)
+            )];
+            @ins_wrap := [MAST::HandlerScope.new(
+                :instructions(@ins_wrap),
+                :category_mask($HandlerCategory::next_label),
+                :action($HandlerAction::unwind_and_goto),
+                :goto($lbl_next),
+                :label($where)
+            )];
+            @ins_wrap := [MAST::HandlerScope.new(
+                :instructions(@ins_wrap),
+                :category_mask($HandlerCategory::last_label),
+                :action($HandlerAction::unwind_and_goto),
+                :goto($lbl_done),
+                :label($where)
+            )];
+        }
         nqp::push($il, MAST::HandlerScope.new(
             :instructions(@ins_wrap),
             :category_mask($HandlerCategory::last),
@@ -1565,12 +1622,29 @@ my %control_map := nqp::hash(
 );
 QAST::MASTOperations.add_core_op('control', -> $qastcomp, $op {
     my $name := $op.name;
+    my $label;
+    for $op.list {
+        $label := $_ if $_.named eq 'label';
+    }
+
     if nqp::existskey(%control_map, $name) {
-        my $il := nqp::list();
-        my $res := $*REGALLOC.fresh_register($MVM_reg_obj);
-        push_op($il, 'throwcatdyn', $res,
-            MAST::IVal.new( :value(%control_map{$name}) ));
-        MAST::InstructionList.new($il, $res, $MVM_reg_obj)
+        if $label {
+            my $where := nqp::where($label.value);
+            my $res   := $*REGALLOC.fresh_register($MVM_reg_obj);
+            MAST::InstructionList.new(
+                [MAST::Op.new( :op('throwlabel'), $res,
+                    MAST::IVal.new( :value(%control_map{$name} + $HandlerCategory::labeled) ),
+                    MAST::IVal.new( :value($where) )
+                )],
+                $res, $MVM_reg_obj)
+        }
+        else {
+            my $il := nqp::list();
+            my $res := $*REGALLOC.fresh_register($MVM_reg_obj);
+            push_op($il, 'throwcatdyn', $res,
+                MAST::IVal.new( :value(%control_map{$name}) ));
+            MAST::InstructionList.new($il, $res, $MVM_reg_obj)
+        }
     }
     else {
         nqp::die("Unknown control exception type '$name'");

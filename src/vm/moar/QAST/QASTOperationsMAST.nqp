@@ -1763,6 +1763,7 @@ my %const_map := nqp::hash(
     'CONTROL_WARN',         256,
     'CONTROL_SUCCEED',      512,
     'CONTROL_PROCEED',      1024,
+    'CONTROL_LABELED',      4096,
 
     'STAT_EXISTS',             0,
     'STAT_FILESIZE',           1,

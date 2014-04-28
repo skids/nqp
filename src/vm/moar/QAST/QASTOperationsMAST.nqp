@@ -1629,14 +1629,20 @@ QAST::MASTOperations.add_core_op('control', -> $qastcomp, $op {
 
     if nqp::existskey(%control_map, $name) {
         if $label {
-            my $where := nqp::where($label.value);
-            my $res   := $*REGALLOC.fresh_register($MVM_reg_obj);
-            MAST::InstructionList.new(
-                [MAST::Op.new( :op('throwlabel'), $res,
-                    MAST::IVal.new( :value(%control_map{$name} + $HandlerCategory::labeled) ),
-                    MAST::IVal.new( :value($where) )
-                )],
-                $res, $MVM_reg_obj)
+            # Create an exception object, and attach the label to its payload.
+            my $res := $*REGALLOC.fresh_register($MVM_reg_obj);
+            my $ex  := $*REGALLOC.fresh_register($MVM_reg_obj);
+            my $lbl := $qastcomp.as_mast($label, :want($MVM_reg_obj));
+            my $cat := $*REGALLOC.fresh_register($MVM_reg_int64);
+            my $il  := MAST::InstructionList.new(nqp::list(), $res, $MVM_reg_obj);
+            $il.append($lbl);
+            push_op($il.instructions, 'newexception',   $ex);
+            push_op($il.instructions, 'bindexpayload',  $ex,  $lbl.result_reg );
+            push_op($il.instructions, 'const_i64',      $cat,
+                MAST::IVal.new( :value(%control_map{$name} + $HandlerCategory::labeled) ) );
+            push_op($il.instructions, 'bindexcategory', $ex,  $cat );
+            push_op($il.instructions, 'throwdyn',       $res, $ex);
+            $il
         }
         else {
             my $il := nqp::list();

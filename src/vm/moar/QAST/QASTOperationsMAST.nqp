@@ -1566,28 +1566,58 @@ QAST::MASTOperations.add_core_op('handle', sub ($qastcomp, $op) {
                 QAST::Op.new( :op('exception') )
             )));
     my $push_target := $hblock;
+    my $has_label   := 0;
     for @children -> $type, $handler {
-        # Get the category mask.
-        unless nqp::existskey(%handler_names, $type) {
-            nqp::die("Invalid handler type '$type'");
+        if $type eq 'LABELED' {
+            $has_label := 1;
+            $mask      := $HandlerCategory::handler;
+            # Rethrow if a label was requested for which we are not in charge for.
+            $hblock.push(
+                QAST::Op.new(
+                    :op('if'),
+                    QAST::Op.new(
+                        :op('bitand_i'),
+                        QAST::Var.new( :name('__category__'), :scope('local') ),
+                        QAST::IVal.new( :value($HandlerCategory::labeled) )
+                    ),
+                    QAST::Op.new(
+                        :op('unless'),
+                        QAST::Op.new(
+                            :op('iseq_i'),
+                            QAST::Op.new( :op('where'),
+                                QAST::Op.new( :op('getpayload'), QAST::Op.new( :op('exception') ) )
+                            ),
+                            QAST::Op.new( :op('where'), $handler )
+                        ),
+                        QAST::Op.new( :op('rethrow'), QAST::Op.new( :op('exception') ) )
+                    )
+                )
+            );
         }
-        my $cat_mask := $type eq 'CONTROL' ?? 0xFFE !! %handler_names{$type};
+        else {
+            # Get the category mask.
+            unless nqp::existskey(%handler_names, $type) {
+                nqp::die("Invalid handler type '$type'");
+            }
+            my $cat_mask := $type eq 'CONTROL' ?? 0xFFE !! %handler_names{$type};
 
-        # Chain in this handler.
-        my $check := QAST::Op.new(
-            :op('if'),
-            QAST::Op.new(
-                :op('bitand_i'),
-                QAST::Var.new( :name('__category__'), :scope('local') ),
-                QAST::IVal.new( :value($cat_mask) )
-            ),
-            $handler
-        );
-        $push_target.push($check);
-        $push_target := $check;
+            # Chain in this handler.
+            my $check := QAST::Op.new(
+                    :op('if'),
+                    QAST::Op.new(
+                        :op('bitand_i'),
+                        QAST::Var.new( :name('__category__'), :scope('local') ),
+                        QAST::IVal.new( :value($cat_mask) )
+                    ),
+                    $handler
+                );
+            # Push this check as the 3rd arg to op 'if' in case this is not the first iteration.
+            $push_target.push($check);
+            $push_target := $check;
 
-        # Add to mask.
-        $mask := nqp::bitor_i($mask, $cat_mask);
+            # Add to mask.
+            $mask := nqp::bitor_i($mask, $cat_mask);
+        }
     }
 
     # Add a local and store the handler block into it.

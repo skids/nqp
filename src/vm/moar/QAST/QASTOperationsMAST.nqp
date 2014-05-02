@@ -1030,55 +1030,39 @@ for ('', 'repeat_') -> $repness {
             # just have the goto label be the place the control exception
             # needs to send control to.
             if $handler {
+                my $where     := 0;
+                my $redo_mask := $HandlerCategory::redo;
+                my $next_mask := $HandlerCategory::next;
+                my $last_mask := $HandlerCategory::last;
+                if $label {
+                    $where     := nqp::where($label.value);
+                    $redo_mask := $redo_mask + $HandlerCategory::labeled;
+                    $next_mask := $next_mask + $HandlerCategory::labeled;
+                    $last_mask := $last_mask + $HandlerCategory::labeled;
+                }
                 my @redo_il := [MAST::HandlerScope.new(
                     :instructions(@loop_il),
-                    :category_mask($HandlerCategory::redo),
+                    :category_mask($redo_mask),
                     :action($HandlerAction::unwind_and_goto),
-                    :goto($redo_lbl)
+                    :goto($redo_lbl),
+                    :label($where)
                 )];
                 my @next_il := [MAST::HandlerScope.new(
                     :instructions(@redo_il),
-                    :category_mask($HandlerCategory::next),
+                    :category_mask($next_mask),
                     :action($HandlerAction::unwind_and_goto),
-                    :goto($operands == 3 ?? $next_lbl !! $test_lbl)
+                    :goto($operands == 3 ?? $next_lbl !! $test_lbl),
+                    :label($where)
                 )];
                 my @last_il := [MAST::HandlerScope.new(
                     :instructions(@next_il),
-                    :category_mask($HandlerCategory::last),
+                    :category_mask($last_mask),
                     :action($HandlerAction::unwind_and_goto),
-                    :goto($done_lbl)
+                    :goto($done_lbl),
+                    :label($where)
                 )];
-
-                if $label {
-                    my $where := nqp::where($label.value);
-                    my @redo_label_il := [MAST::HandlerScope.new(
-                        :instructions(@last_il),
-                        :category_mask($HandlerCategory::redo + $HandlerCategory::labeled),
-                        :action($HandlerAction::unwind_and_goto),
-                        :goto($redo_lbl),
-                        :label($where)
-                    )];
-                    my @next_label_il := [MAST::HandlerScope.new(
-                        :instructions(@redo_label_il),
-                        :category_mask($HandlerCategory::next + $HandlerCategory::labeled),
-                        :action($HandlerAction::unwind_and_goto),
-                        :goto($operands == 3 ?? $next_lbl !! $test_lbl),
-                        :label($where)
-                    )];
-                    my @last_label_il := [MAST::HandlerScope.new(
-                        :instructions(@next_label_il),
-                        :category_mask($HandlerCategory::last + $HandlerCategory::labeled),
-                        :action($HandlerAction::unwind_and_goto),
-                        :goto($done_lbl),
-                        :label($where)
-                    )];
-                    nqp::push(@last_label_il, $done_lbl);
-                    MAST::InstructionList.new(@last_label_il, $res_reg, $res_kind)
-                }
-                else {
-                    nqp::push(@last_il, $done_lbl);
-                    MAST::InstructionList.new(@last_il, $res_reg, $res_kind)
-                }
+                nqp::push(@last_il, $done_lbl);
+                MAST::InstructionList.new(@last_il, $res_reg, $res_kind)
             }
             else {
                 nqp::push(@loop_il, $done_lbl);
@@ -1166,48 +1150,37 @@ QAST::MASTOperations.add_core_op('for', -> $qastcomp, $op {
 
     # Emit postlude, wrapping in handlers if needed.
     if $handler {
+        my $where     := 0;
+        my $redo_mask := $HandlerCategory::redo;
+        my $next_mask := $HandlerCategory::next;
+        my $last_mask := $HandlerCategory::last;
+        if $label {
+            $where     := nqp::where($label.value);
+            $redo_mask := $redo_mask + $HandlerCategory::labeled;
+            $next_mask := $next_mask + $HandlerCategory::labeled;
+            $last_mask := $last_mask + $HandlerCategory::labeled;
+        }
         my @ins_wrap := $loop_il.instructions;
         @ins_wrap := [MAST::HandlerScope.new(
             :instructions(@ins_wrap),
-            :category_mask($HandlerCategory::redo),
+            :category_mask($redo_mask),
             :action($HandlerAction::unwind_and_goto),
-            :goto($lbl_redo)
+            :goto($lbl_redo),
+            :label($where)
         )];
         @ins_wrap := [MAST::HandlerScope.new(
             :instructions(@ins_wrap),
-            :category_mask($HandlerCategory::next),
+            :category_mask($next_mask),
             :action($HandlerAction::unwind_and_goto),
-            :goto($lbl_next)
+            :goto($lbl_next),
+            :label($where)
         )];
-        if $label {
-            my $where := nqp::where($label.value);
-            @ins_wrap := [MAST::HandlerScope.new(
-                :instructions(@ins_wrap),
-                :category_mask($HandlerCategory::redo_label),
-                :action($HandlerAction::unwind_and_goto),
-                :goto($lbl_redo),
-                :label($where)
-            )];
-            @ins_wrap := [MAST::HandlerScope.new(
-                :instructions(@ins_wrap),
-                :category_mask($HandlerCategory::next_label),
-                :action($HandlerAction::unwind_and_goto),
-                :goto($lbl_next),
-                :label($where)
-            )];
-            @ins_wrap := [MAST::HandlerScope.new(
-                :instructions(@ins_wrap),
-                :category_mask($HandlerCategory::last_label),
-                :action($HandlerAction::unwind_and_goto),
-                :goto($lbl_done),
-                :label($where)
-            )];
-        }
         nqp::push($il, MAST::HandlerScope.new(
             :instructions(@ins_wrap),
-            :category_mask($HandlerCategory::last),
+            :category_mask($last_mask),
             :action($HandlerAction::unwind_and_goto),
-            :goto($lbl_done)
+            :goto($lbl_done),
+            :label($where)
         ));
     }
     else {

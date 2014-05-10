@@ -1,4 +1,4 @@
-plan(11);
+plan(12);
 
 my $i := 0; # counter
 my $k := 0; # counter
@@ -61,6 +61,16 @@ $t := 0;
 TESTC: while $i++ < 7 { $k := 0; while $k++ < 3 { next TESTC if $i > 5; $t := $i * $k } }
 is($t, 15, "next with outer loop's label in inner loop");
 
+$i := 0;
+$t := '';
+TESTD1: for ["foo"] {
+    $t := $t ~ $_;
+    TESTD2: for ["bar"] {
+        $t := $t ~ $_;
+        redo TESTD1 unless $i++
+    }
+}
+is($t, 'foobarfoobar', 'redoing outer for loop');
 
 sub is($a, $b, $text) {
     if $a == $b {

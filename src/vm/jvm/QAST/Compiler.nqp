@@ -81,6 +81,7 @@ my $EX_CAT_PROCEED := 256;
 my $EX_CAT_CONTROL := $EX_CAT_NEXT +| $EX_CAT_REDO +| $EX_CAT_LAST +|
                       $EX_CAT_TAKE +| $EX_CAT_WARN +|
                       $EX_CAT_SUCCEED +| $EX_CAT_PROCEED;
+my $EX_CAT_LABELED := 4096;
 
 # Exception handler kinds.
 my $EX_UNWIND_SIMPLE := 0;
@@ -1066,7 +1067,7 @@ for ('', 'repeat_') -> $repness {
             my $l_handler_id;
             my $nr_handler_id;
             if $handler {
-                $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST, :ex_obj(1));
+                $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST,                 :ex_obj(1));
                 $nr_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT +| $EX_CAT_REDO, :ex_obj(1));
             }
             
@@ -1132,6 +1133,8 @@ for ('', 'repeat_') -> $repness {
                 my $catch := JAST::InstructionList.new();
                 $qastcomp.unwind_check($catch, $nr_handler_id, :$label, :outer($l_handler_id));
                 $catch.append(JAST::Instruction.new( :op('getfield'), $TYPE_EX_UNWIND, 'category', 'Long' ));
+                $catch.append(JAST::PushIVal.new( :value($EX_CAT_REDO) ));
+                $catch.append(JAST::Instruction.new( :op('land') ));
                 $catch.append(JAST::PushIVal.new( :value($EX_CAT_REDO) ));
                 $catch.append($LCMP);
                 $catch.append(JAST::Instruction.new( :op('ifeq'), $redo_lbl ));
@@ -1712,7 +1715,10 @@ QAST::OperationsJAST.add_core_op('handle', :!inlinable, sub ($qastcomp, $op) {
 my %control_map := nqp::hash(
     'next', $EX_CAT_NEXT,
     'last', $EX_CAT_LAST,
-    'redo', $EX_CAT_REDO
+    'redo', $EX_CAT_REDO,
+    'next_label', $EX_CAT_NEXT +| $EX_CAT_LABELED,
+    'last_label', $EX_CAT_LAST +| $EX_CAT_LABELED,
+    'redo_label', $EX_CAT_REDO +| $EX_CAT_LABELED
 );
 QAST::OperationsJAST.add_core_op('control', -> $qastcomp, $op {
     my $label;
@@ -1721,10 +1727,10 @@ QAST::OperationsJAST.add_core_op('control', -> $qastcomp, $op {
     }
     my $name := $op.name;
     if nqp::existskey(%control_map, $name) {
-        my $cat := %control_map{$name};
         my $il := JAST::InstructionList.new();
         $*STACK.spill_to_locals($il);
         if $label {
+            my $cat := %control_map{$name ~ '_label'};
             my $new_ex := $*TA.fresh_o();
 
             # Create a new exception object
@@ -1758,6 +1764,7 @@ QAST::OperationsJAST.add_core_op('control', -> $qastcomp, $op {
                 '_throw_c', 'Void', $TYPE_SMO, $TYPE_TC )));
         }
         else {
+            my $cat := %control_map{$name};
             $il.append(JAST::PushIVal.new( :value($cat) ));
             $il.append($ALOAD_1);
             $il.append(savesite(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,

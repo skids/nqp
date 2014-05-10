@@ -4529,9 +4529,12 @@ public final class Ops {
         }
     }
     public static void _is_same_label(UnwindException uwex, long where, long outerHandler, ThreadContext tc) {
+        if ((uwex.category & ExceptionHandling.EX_CAT_LABELED) == 0)
+            return;
+
         if (uwex instanceof UnwindException) {
             VMExceptionInstance vmex = (VMExceptionInstance)uwex.result;
-            if (vmex == null)
+            if (vmex == null || (vmex.category & ExceptionHandling.EX_CAT_LABELED) == 0)
                 return;
 
             if (vmex instanceof VMExceptionInstance) {

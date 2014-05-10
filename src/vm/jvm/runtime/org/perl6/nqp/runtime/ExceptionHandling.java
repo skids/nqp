@@ -18,7 +18,7 @@ public class ExceptionHandling {
     public static final int EX_CAT_TAKE = 32;
     public static final int EX_CAT_WARN = 64;
     public static final int EX_CAT_SUCCEED = 128;
-    public static final int EX_CAT_PROCEED = 256;
+    public static final int EX_CAT_LABELED = 4096;
     
     /* Exception handler kinds. */
     public static final int EX_UNWIND_SIMPLE = 0;
@@ -139,7 +139,6 @@ all:
             tc.unwinder.unwindTarget = handlerInfo[0];
             tc.unwinder.unwindCompUnit = handlerFrame.codeRef.staticInfo.compUnit;
             tc.unwinder.category = category;
-            tc.unwinder.result = null;
             throw tc.unwinder;
         case EX_UNWIND_OBJECT:
             tc.unwinder.unwindTarget = handlerInfo[0];

@@ -79,9 +79,7 @@ all:
                 while (tryHandler != 0) {
                     for (int i = 0; i < handlers.length; i++) {
                         if (handlers[i][0] == tryHandler) {
-                            // Found an active one, but is it the right category?
                             if ((handlers[i][2] & category) != 0) {
-                                // Correct category, but ensure we aren't already in it.
                                 boolean valid = true;
                                 for (int j = 0; j < tc.handlers.size(); j++) {
                                     if (tc.handlers.get(j).handlerInfo == handlers[i]) {
@@ -139,6 +137,14 @@ all:
             tc.unwinder.unwindTarget = handlerInfo[0];
             tc.unwinder.unwindCompUnit = handlerFrame.codeRef.staticInfo.compUnit;
             tc.unwinder.category = category;
+            tc.unwinder.result = null;
+            throw tc.unwinder;
+        case EX_UNWIND_OBJECT:
+            tc.unwinder.unwindTarget = handlerInfo[0];
+            tc.unwinder.unwindCompUnit = handlerFrame.codeRef.staticInfo.compUnit;
+            tc.unwinder.category = category;
+            if (exObj != null)
+                tc.unwinder.result = (SixModelObject)exObj;
             throw tc.unwinder;
         case EX_BLOCK:
             try {

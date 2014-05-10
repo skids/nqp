@@ -4520,6 +4520,26 @@ public final class Ops {
             throw ExceptionHandling.dieInternal(tc, "throw needs an object with VMException representation");
         }
     }
+    public static void _is_same_label(UnwindException uwex, long where, long outerHandler, ThreadContext tc) {
+        if (uwex instanceof UnwindException) {
+            VMExceptionInstance vmex = (VMExceptionInstance)uwex.result;
+            if (vmex == null)
+                return;
+
+            if (vmex instanceof VMExceptionInstance) {
+                if (vmex.payload.hashCode() == where)
+                    return;
+                /* We're moving to the outside so we do not rethrow to us. */
+                tc.curFrame.curHandler = outerHandler;
+                vmex.origin = tc.curFrame;
+                vmex.nativeTrace = (new Throwable()).getStackTrace();
+                ExceptionHandling.handlerDynamic(tc, vmex.category, false, vmex);
+            }
+        }
+        else {
+            throw ExceptionHandling.dieInternal(tc, "_is_same_label needs an object with UnwindException representation");
+        }
+    }
     public static void rethrow_c(SixModelObject obj, ThreadContext tc) {
         if (obj instanceof VMExceptionInstance) {
             VMExceptionInstance ex = (VMExceptionInstance)obj;

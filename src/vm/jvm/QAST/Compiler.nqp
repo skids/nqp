@@ -1040,8 +1040,10 @@ for ('', 'repeat_') -> $repness {
             my $handler := 1;
             my @operands;
             my $orig_type;
+            my $label;
             for $op.list {
                 if $_.named eq 'nohandler' { $handler := 0; }
+                elsif $_.named eq 'label' { $label := $_; }
                 else { @operands.push($_) }
             }
             if +@operands != 2 && +@operands != 3 {
@@ -1064,8 +1066,8 @@ for ('', 'repeat_') -> $repness {
             my $l_handler_id;
             my $nr_handler_id;
             if $handler {
-                $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST);
-                $nr_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT +| $EX_CAT_REDO);
+                $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST, :ex_obj(1));
+                $nr_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT +| $EX_CAT_REDO, :ex_obj(1));
             }
             
             # Emit loop prelude, evaluating condition. 
@@ -1128,7 +1130,7 @@ for ('', 'repeat_') -> $repness {
             # Add redo and next handler if needed.
             if $handler {
                 my $catch := JAST::InstructionList.new();
-                $qastcomp.unwind_check($catch, $nr_handler_id);
+                $qastcomp.unwind_check($catch, $nr_handler_id, :$label, :outer($l_handler_id));
                 $catch.append(JAST::Instruction.new( :op('getfield'), $TYPE_EX_UNWIND, 'category', 'Long' ));
                 $catch.append(JAST::PushIVal.new( :value($EX_CAT_REDO) ));
                 $catch.append($LCMP);
@@ -1155,7 +1157,7 @@ for ('', 'repeat_') -> $repness {
             # If needed, wrap the whole thing in a last exception handler.
             if $handler {
                 my $catch := JAST::InstructionList.new();
-                $qastcomp.unwind_check($catch, $l_handler_id);
+                $qastcomp.unwind_check($catch, $l_handler_id, :$label, :outer($*HANDLER_IDX));
                 $catch.append($POP);
                 $il := $qastcomp.delimit_handler(
                     JAST::TryCatch.new( :try($il), :catch($catch), :type($TYPE_EX_UNWIND) ),
@@ -1179,8 +1181,10 @@ for ('', 'repeat_') -> $repness {
 QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     my $handler := 1;
     my @operands;
+    my $label;
     for $op.list {
         if $_.named eq 'nohandler' { $handler := 0; }
+        elsif $_.named eq 'label' { $label := $_; }
         else { @operands.push($_) }
     }
     
@@ -1205,9 +1209,9 @@ QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     my $n_handler_id;
     my $r_handler_id;
     if $handler {
-        $l_handler_id  := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST);
-        $n_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT);
-        $r_handler_id := &*REGISTER_UNWIND_HANDLER($n_handler_id, $EX_CAT_REDO);
+        $l_handler_id := &*REGISTER_UNWIND_HANDLER($*HANDLER_IDX, $EX_CAT_LAST, :ex_obj(1));
+        $n_handler_id := &*REGISTER_UNWIND_HANDLER($l_handler_id, $EX_CAT_NEXT, :ex_obj(1));
+        $r_handler_id := &*REGISTER_UNWIND_HANDLER($n_handler_id, $EX_CAT_REDO, :ex_obj(1));
     }
     
     # Evaluate the thing we'll iterate over, get the iterator and
@@ -1285,7 +1289,7 @@ QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     # Wrap block invocation in redo handler if needed.
     if $handler {
         my $catch := JAST::InstructionList.new();
-        $qastcomp.unwind_check($catch, $r_handler_id);
+        $qastcomp.unwind_check($catch, $r_handler_id, :$label, :outer($n_handler_id));
         $catch.append($POP);
         $catch.append(JAST::Instruction.new( :op('goto'), $lbl_redo ));
         $inv_il := $qastcomp.delimit_handler(
@@ -1297,7 +1301,7 @@ QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     # Wrap value fetching and call in "next" handler if needed.
     if $handler {
         my $catch := JAST::InstructionList.new();
-        $qastcomp.unwind_check($catch, $n_handler_id);
+        $qastcomp.unwind_check($catch, $n_handler_id, :$label, :outer($l_handler_id));
         $catch.append($POP);
         $val_il := $qastcomp.delimit_handler(
             JAST::TryCatch.new( :try($val_il), :$catch, :type($TYPE_EX_UNWIND) ),
@@ -1309,7 +1313,7 @@ QAST::OperationsJAST.add_core_op('for', -> $qastcomp, $op {
     # Emit postlude, wrapping in last handler if needed.
     if $handler {
         my $catch := JAST::InstructionList.new();
-        $qastcomp.unwind_check($catch, $l_handler_id);
+        $qastcomp.unwind_check($catch, $l_handler_id, :$label, :outer($*HANDLER_IDX));
         $catch.append($POP);
         $catch.append(JAST::Instruction.new( :op('goto'), $lbl_done ));
         $loop_il := $qastcomp.delimit_handler(
@@ -1711,15 +1715,54 @@ my %control_map := nqp::hash(
     'redo', $EX_CAT_REDO
 );
 QAST::OperationsJAST.add_core_op('control', -> $qastcomp, $op {
+    my $label;
+    for $op.list {
+        if $_.named eq 'label' { $label := $_; }
+    }
     my $name := $op.name;
     if nqp::existskey(%control_map, $name) {
         my $cat := %control_map{$name};
         my $il := JAST::InstructionList.new();
         $*STACK.spill_to_locals($il);
-        $il.append(JAST::PushIVal.new( :value($cat) ));
-        $il.append($ALOAD_1);
-        $il.append(savesite(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
-            'throwcatdyn_c', 'Void', 'Long', $TYPE_TC )));
+        if $label {
+            my $new_ex := $*TA.fresh_o();
+
+            # Create a new exception object
+            $il.append($ALOAD_1); # TC
+            $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
+                'newexception', $TYPE_SMO, $TYPE_TC ));
+            $il.append(JAST::Instruction.new( :op('astore'), $new_ex ));
+
+            # Store the label as payload
+            $il.append(JAST::Instruction.new( :op('aload'), $new_ex ));
+            my $payload := $qastcomp.as_jast($label, :want($RT_OBJ));
+            $il.append($payload.jast);
+            $*STACK.obtain($il, $payload);
+            $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
+            $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
+                'setpayload', $TYPE_SMO, $TYPE_SMO, $TYPE_SMO, $TYPE_TC ));
+            $il.append($POP); # discard payload
+
+            # Set exception type
+            $il.append(JAST::Instruction.new( :op('aload'), $new_ex ));
+            $il.append(JAST::PushIVal.new( :value($cat) ));
+            $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
+            $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
+                'setextype', 'Long', $TYPE_SMO, 'Long', $TYPE_TC ));
+            $il.append($POP2); # discard exception category
+
+            # Throw it
+            $il.append(JAST::Instruction.new( :op('aload'), $new_ex ));
+            $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
+            $il.append(savesite(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
+                '_throw_c', 'Void', $TYPE_SMO, $TYPE_TC )));
+        }
+        else {
+            $il.append(JAST::PushIVal.new( :value($cat) ));
+            $il.append($ALOAD_1);
+            $il.append(savesite(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS,
+                'throwcatdyn_c', 'Void', 'Long', $TYPE_TC )));
+        }
         result_from_cf($il, $RT_OBJ);
     }
     else {
@@ -4325,7 +4368,7 @@ class QAST::CompilerJAST {
     # rethrow of the handler. Assumes the exception is on the stack top,
     # and that we will not swallow it.
     my $unwind_lbl := 0;
-    method unwind_check($il, $desired) {
+    method unwind_check($il, $desired, :$label, :$outer = 0) {
         my $lbl_i := JAST::Label.new( :name('unwind_' ~ $unwind_lbl++) );
         my $lbl_c := JAST::Label.new( :name('unwind_' ~ $unwind_lbl++) );
         $il.append($DUP);
@@ -4341,6 +4384,12 @@ class QAST::CompilerJAST {
         $il.append(JAST::Instruction.new( :op('if_acmpeq'), $lbl_c ));
         $il.append($ATHROW);
         $il.append($lbl_c);
+
+        $il.append($DUP);
+        $il.append(JAST::PushIVal.new( :value($label ?? nqp::where($label.value) !! 0) ));
+        $il.append(JAST::PushIVal.new( :value($outer) ));
+        $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
+        $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS, '_is_same_label', 'Void', $TYPE_EX_UNWIND, 'Long', 'Long', $TYPE_TC ));
     }
     
     # Wraps a handler with code to set/clear the current handler.

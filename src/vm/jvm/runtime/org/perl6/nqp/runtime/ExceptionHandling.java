@@ -79,7 +79,9 @@ all:
                 while (tryHandler != 0) {
                     for (int i = 0; i < handlers.length; i++) {
                         if (handlers[i][0] == tryHandler) {
+                            // Found an active one, but is it the right category?
                             if ((handlers[i][2] & category) != 0) {
+                                // Correct category, but ensure we aren't already in it.
                                 boolean valid = true;
                                 for (int j = 0; j < tc.handlers.size(); j++) {
                                     if (tc.handlers.get(j).handlerInfo == handlers[i]) {

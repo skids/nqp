@@ -4533,19 +4533,15 @@ public final class Ops {
             return;
 
         if (uwex instanceof UnwindException) {
-            VMExceptionInstance vmex = (VMExceptionInstance)uwex.result;
-            if (vmex == null || (vmex.category & ExceptionHandling.EX_CAT_LABELED) == 0)
+            SixModelObject payload = uwex.payload;
+            if (payload.hashCode() == where)
                 return;
-
-            if (vmex instanceof VMExceptionInstance) {
-                if (vmex.payload.hashCode() == where)
-                    return;
-                /* We're moving to the outside so we do not rethrow to us. */
-                tc.curFrame.curHandler = outerHandler;
-                vmex.origin = tc.curFrame;
-                vmex.nativeTrace = (new Throwable()).getStackTrace();
-                ExceptionHandling.handlerDynamic(tc, vmex.category, false, vmex);
-            }
+            /* We're moving to the outside so we do not rethrow to us. */
+            VMExceptionInstance vmex = (VMExceptionInstance)newexception(tc);
+            vmex.category = uwex.category;
+            vmex.payload = payload;
+            tc.curFrame.curHandler = outerHandler;
+            ExceptionHandling.handlerDynamic(tc, vmex.category, false, vmex);
         }
         else {
             throw ExceptionHandling.dieInternal(tc, "_is_same_label needs an object with UnwindException representation");

@@ -145,7 +145,7 @@ all:
             tc.unwinder.unwindCompUnit = handlerFrame.codeRef.staticInfo.compUnit;
             tc.unwinder.category = category;
             if (exObj != null)
-                tc.unwinder.result = (SixModelObject)exObj;
+                tc.unwinder.payload = (SixModelObject)exObj.payload;
             throw tc.unwinder;
         case EX_BLOCK:
             try {
@@ -178,6 +178,8 @@ all:
             tc.unwinder.unwindTarget = handlerInfo[0];
             tc.unwinder.unwindCompUnit = handlerFrame.codeRef.staticInfo.compUnit;
             tc.unwinder.result = Ops.result_o(tc.curFrame);
+            if (exObj != null)
+                tc.unwinder.payload = (SixModelObject)exObj.payload;
             throw tc.unwinder;
         default:
             throw ExceptionHandling.dieInternal(tc, "Unknown exception kind");

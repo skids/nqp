@@ -1630,28 +1630,56 @@ QAST::OperationsJAST.add_core_op('handle', :!inlinable, sub ($qastcomp, $op) {
                 QAST::Op.new( :op('exception') )
             )));
     my $push_target := $hblock;
+    my $has_label   := 0;
     for @children -> $type, $handler {
-        # Get the category mask.
-        unless nqp::existskey(%handler_names, $type) {
-            nqp::die("Invalid handler type '$type'");
+        if $type eq 'LABELED' {
+            $has_label := 1;
+            # Rethrow if a label was requested for which we are not in charge for.
+            $hblock.push(
+                QAST::Op.new(
+                    :op('if'),
+                    QAST::Op.new(
+                        :op('bitand_i'),
+                        QAST::Var.new( :name('__category__'), :scope('local') ),
+                        QAST::IVal.new( :value($EX_CAT_LABELED) )
+                    ),
+                    QAST::Op.new(
+                        :op('unless'),
+                        QAST::Op.new(
+                            :op('iseq_i'),
+                            QAST::Op.new( :op('where'),
+                                QAST::Op.new( :op('getpayload'), QAST::Op.new( :op('exception') ) )
+                            ),
+                            QAST::Op.new( :op('where'), $handler )
+                        ),
+                        QAST::Op.new( :op('rethrow'), QAST::Op.new( :op('exception') ) )
+                    )
+                )
+            );
         }
-        my $cat_mask := %handler_names{$type};
-        
-        # Chain in this handler.
-        my $check := QAST::Op.new(
-            :op('if'),
-            QAST::Op.new(
-                :op('bitand_i'),
-                QAST::Var.new( :name('__category__'), :scope('local') ),
-                QAST::IVal.new( :value($cat_mask) )
-            ),
-            $handler
-        );
-        $push_target.push($check);
-        $push_target := $check;
-        
-        # Add to mask.
-        $mask := nqp::bitor_i($mask, $cat_mask);
+        else {
+            # Get the category mask.
+            unless nqp::existskey(%handler_names, $type) {
+                nqp::die("Invalid handler type '$type'");
+            }
+            my $cat_mask := %handler_names{$type};
+            
+            # Chain in this handler.
+            my $check := QAST::Op.new(
+                :op('if'),
+                QAST::Op.new(
+                    :op('bitand_i'),
+                    QAST::Var.new( :name('__category__'), :scope('local') ),
+                    QAST::IVal.new( :value($cat_mask) )
+                ),
+                $handler
+            );
+            $push_target.push($check);
+            $push_target := $check;
+            
+            # Add to mask.
+            $mask := nqp::bitor_i($mask, $cat_mask);
+        }
     }
     
     # Compile, create a lexical to put the handler in, and add it. Should
@@ -1685,7 +1713,7 @@ QAST::OperationsJAST.add_core_op('handle', :!inlinable, sub ($qastcomp, $op) {
     # after unwind" flag, used to force this whole block to exit.
     my $catchil := JAST::InstructionList.new();
     my $exitlbl := JAST::Label.new( :name($qastcomp.unique('unwindexit')) );
-    $qastcomp.unwind_check($catchil, $handler);
+    $qastcomp.unwind_check($catchil, $handler, :handler_cares($has_label));
     $catchil.append(JAST::Instruction.new( :op('getfield'), $TYPE_EX_UNWIND, 'result', $TYPE_SMO ));
     $catchil.append(JAST::Instruction.new( :op('astore'), $result ));
     $catchil.append(JAST::Instruction.new( :op('aload'), 'cf' ));
@@ -4376,7 +4404,7 @@ class QAST::CompilerJAST {
     # rethrow of the handler. Assumes the exception is on the stack top,
     # and that we will not swallow it.
     my $unwind_lbl := 0;
-    method unwind_check($il, $desired, :$label, :$outer = 0) {
+    method unwind_check($il, $desired, :$label, :$outer = 0, :$handler_cares) {
         my $lbl_i := JAST::Label.new( :name('unwind_' ~ $unwind_lbl++) );
         my $lbl_c := JAST::Label.new( :name('unwind_' ~ $unwind_lbl++) );
         $il.append($DUP);
@@ -4393,11 +4421,14 @@ class QAST::CompilerJAST {
         $il.append($ATHROW);
         $il.append($lbl_c);
 
-        $il.append($DUP);
-        $il.append(JAST::PushIVal.new( :value($label ?? nqp::where($label.value) !! 0) ));
-        $il.append(JAST::PushIVal.new( :value($outer) ));
-        $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
-        $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS, '_is_same_label', 'Void', $TYPE_EX_UNWIND, 'Long', 'Long', $TYPE_TC ));
+        unless $handler_cares {
+            $il.append($DUP);
+            $il.append(JAST::PushIVal.new( :value($label ?? nqp::where($label.value) !! 0) ));
+            $il.append(JAST::PushIVal.new( :value($outer) ));
+            $il.append(JAST::Instruction.new( :op('aload'), 'tc' ));
+            $il.append(JAST::Instruction.new( :op('invokestatic'), $TYPE_OPS, '_is_same_label',
+                'Void', $TYPE_EX_UNWIND, 'Long', 'Long', $TYPE_TC ));
+        }
     }
     
     # Wraps a handler with code to set/clear the current handler.

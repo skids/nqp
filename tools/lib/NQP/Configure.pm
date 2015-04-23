@@ -321,9 +321,9 @@ sub gen_nqp {
 
     if (defined $gen_nqp || defined $gen_parrot) {
         git_checkout(
-            github_url($git_protocol, 'perl6', 'nqp'),
+            github_url($git_protocol, 'skids', 'nqp'),
             'nqp', $nqp_want,
-            github_url('ssh', 'perl6', 'nqp'),
+            github_url('ssh', 'skids', 'nqp'),
             $options{'git-depth'} ? "--depth=$options{'git-depth'}" : '',
             $options{'git-reference'} ? "--reference=$options{'git-reference'}/nqp" : '',
         );
@@ -460,9 +460,9 @@ sub gen_moar {
     return unless defined $gen_moar;
 
     my $moar_repo = git_checkout(
-        github_url($git_protocol, 'MoarVM', 'MoarVM'),
+        github_url($git_protocol, 'skids', 'MoarVM'),
         'MoarVM', $gen_moar || $moar_want,
-        github_url('ssh', 'MoarVM', 'MoarVM'),
+        github_url('ssh', 'skids', 'MoarVM'),
         $options{'git-depth'} ? "--depth=$options{'git-depth'}" : '',
         $options{'git-reference'} ? "--reference=$options{'git-reference'}/MoarVM" : '',
     );
